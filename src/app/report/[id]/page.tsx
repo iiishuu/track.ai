@@ -11,6 +11,7 @@ import { RecommendationList } from "@/frontend/components/report/RecommendationL
 import { Separator } from "@/frontend/components/ui/separator";
 import { BackButton } from "@/frontend/components/ui/BackButton";
 import { getServerDictionary } from "@/shared/i18n/server";
+import { getSupabaseAdmin } from "@/backend/lib/supabase/client";
 import type { Report } from "@/shared/types";
 
 interface ReportPageProps {
@@ -18,13 +19,26 @@ interface ReportPageProps {
 }
 
 async function getReport(id: string): Promise<Report | null> {
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
   try {
-    const response = await fetch(`${baseUrl}/api/report/${id}`, {
-      cache: "no-store",
-    });
-    if (!response.ok) return null;
-    return response.json();
+    const supabase = getSupabaseAdmin();
+    const { data: report, error } = await supabase
+      .from("reports")
+      .select("*")
+      .eq("id", id)
+      .single();
+
+    if (error || !report) return null;
+
+    return {
+      id: report.id,
+      scanId: report.scan_id,
+      domain: report.domain,
+      sector: report.sector,
+      metrics: report.metrics,
+      queryResults: report.query_results,
+      recommendations: report.recommendations,
+      createdAt: report.created_at,
+    };
   } catch {
     return null;
   }
