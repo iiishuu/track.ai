@@ -15,7 +15,8 @@ const SENTIMENT_SCORES: Record<Sentiment, number> = {
 
 export function computeCitationRate(results: QueryResult[]): number {
   if (results.length === 0) return 0;
-  const cited = results.filter((r) => r.isPresent).length;
+  // Only count results where the brand is genuinely present with real info
+  const cited = results.filter((r) => r.isPresent && r.isSubstantive !== false).length;
   return cited / results.length;
 }
 
@@ -126,15 +127,14 @@ export function computeVisibilityScore(results: QueryResult[]): number {
       sentimentScore * WEIGHTS.sentiment +
       diversityScore * WEIGHTS.sourcesDiversity;
   } else {
-    // No ranking data: redistribute position weight to other factors
-    // This avoids penalizing brands that are mentioned everywhere
-    // but not in numbered lists
-    const totalWithoutPosition =
-      WEIGHTS.citationRate + WEIGHTS.sentiment + WEIGHTS.sourcesDiversity;
+    // No ranking data: give a neutral position score (0.3) instead of
+    // redistributing weight, which was too generous for unknown brands
+    const neutralPositionScore = 0.3;
     rawScore =
-      citationRate * (WEIGHTS.citationRate / totalWithoutPosition) +
-      sentimentScore * (WEIGHTS.sentiment / totalWithoutPosition) +
-      diversityScore * (WEIGHTS.sourcesDiversity / totalWithoutPosition);
+      citationRate * WEIGHTS.citationRate +
+      neutralPositionScore * WEIGHTS.averagePosition +
+      sentimentScore * WEIGHTS.sentiment +
+      diversityScore * WEIGHTS.sourcesDiversity;
   }
 
   return Math.round(rawScore * 100);

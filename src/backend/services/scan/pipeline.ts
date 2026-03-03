@@ -6,6 +6,7 @@ import { discoverDomain } from "./discovery";
 import { analyzeResponse } from "./analysis";
 import { computeMetrics } from "./scoringEngine";
 import { generateRecommendations } from "./recommendations";
+import { auditResults } from "./scoringAudit";
 
 export interface ScanOptions {
   depth: ScanDepth;
@@ -89,10 +90,22 @@ export async function runScanPipeline(
       queryResults.push(...batchResults);
     }
 
-    // 6. Compute score + metrics
-    const metrics = computeMetrics(queryResults, domain);
+    // 6. Compute preliminary score + metrics
+    const preliminaryMetrics = computeMetrics(queryResults, domain);
 
-    // 7. Generate recommendations (with full context)
+    // 7. AI Audit — review results for false positives, wrong sentiments, brand confusion
+    const auditedResults = await auditResults(
+      domain,
+      discovery.sector,
+      preliminaryMetrics.visibilityScore,
+      queryResults,
+      provider
+    );
+
+    // 8. Recompute metrics with audited results
+    const metrics = computeMetrics(auditedResults, domain);
+
+    // 9. Generate recommendations (with full context)
     const recommendations = await generateRecommendations(
       {
         domain,
@@ -105,7 +118,7 @@ export async function runScanPipeline(
       locale
     );
 
-    // 8. Save report in DB
+    // 10. Save report in DB
     const { data: report, error: reportError } = await supabase
       .from("reports")
       .insert({
@@ -114,7 +127,7 @@ export async function runScanPipeline(
         sector: discovery.sector,
         score: metrics.visibilityScore,
         metrics,
-        query_results: queryResults,
+        query_results: auditedResults,
         recommendations,
       })
       .select("id")
@@ -124,7 +137,7 @@ export async function runScanPipeline(
       throw new Error(`Failed to save report: ${reportError?.message}`);
     }
 
-    // 9. Update scan status to completed
+    // 11. Update scan status to completed
     await supabase
       .from("scans")
       .update({ status: "completed" })
@@ -139,7 +152,7 @@ export async function runScanPipeline(
         domain,
         sector: discovery.sector,
         metrics,
-        queryResults,
+        queryResults: auditedResults,
         recommendations,
         createdAt: new Date().toISOString(),
       },

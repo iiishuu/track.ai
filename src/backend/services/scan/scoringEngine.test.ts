@@ -303,15 +303,17 @@ describe("computeVisibilityScore", () => {
     expect(score1).toBe(score2);
   });
 
-  it("does not penalize when position is N/A but brand is cited", () => {
+  it("gives moderate score when position is N/A but brand is cited", () => {
     // Brand cited in all responses, positive sentiment, but no ranked lists
     const results = [
       makeResult({ isPresent: true, rank: null, sentiment: "positive", sources: ["a.com"] }),
       makeResult({ isPresent: true, rank: null, sentiment: "positive", sources: ["b.com"] }),
     ];
     const score = computeVisibilityScore(results);
-    // With 100% citation, positive sentiment, good diversity => should score high
-    expect(score).toBeGreaterThanOrEqual(80);
+    // With 100% citation + positive sentiment but neutral position => moderate-high
+    // citationRate=1*0.4 + positionNeutral=0.3*0.3 + sentiment=1*0.2 + diversity=1*0.1 = 0.79 => 79
+    expect(score).toBeGreaterThanOrEqual(60);
+    expect(score).toBeLessThanOrEqual(85);
   });
 
   it("scores higher with position data than without when all else equal", () => {
@@ -371,5 +373,47 @@ describe("computeMetrics", () => {
     expect(metrics.averagePosition).toBeNull();
     expect(metrics.shareOfVoice).toEqual({});
     expect(metrics.influenceSources).toEqual([]);
+  });
+});
+
+// ----- isSubstantive filtering -----
+
+describe("isSubstantive filtering in citation rate", () => {
+  it("excludes non-substantive results from citation rate", () => {
+    const results = [
+      makeResult({ isPresent: true, isSubstantive: true }),
+      makeResult({ isPresent: true, isSubstantive: false }),
+      makeResult({ isPresent: true, isSubstantive: false }),
+      makeResult({ isPresent: false }),
+    ];
+    // Only 1 out of 4 is genuinely present (isPresent=true AND isSubstantive!=false)
+    expect(computeCitationRate(results)).toBe(0.25);
+  });
+
+  it("counts results without isSubstantive field as substantive (backward compat)", () => {
+    const results = [
+      makeResult({ isPresent: true }), // no isSubstantive field => treated as substantive
+      makeResult({ isPresent: true }),
+    ];
+    expect(computeCitationRate(results)).toBe(1);
+  });
+
+  it("gives low score for brand with many non-substantive results", () => {
+    // Simulates hedarp.fr case: 9/10 present but 8 are non-substantive
+    const results = [
+      makeResult({ isPresent: true, isSubstantive: true, rank: null, sentiment: "positive", sources: ["a.com"] }),
+      makeResult({ isPresent: true, isSubstantive: false, rank: null, sentiment: "neutral", sources: ["b.com"] }),
+      makeResult({ isPresent: true, isSubstantive: false, rank: null, sentiment: "neutral", sources: ["c.com"] }),
+      makeResult({ isPresent: true, isSubstantive: false, rank: null, sentiment: "neutral", sources: ["d.com"] }),
+      makeResult({ isPresent: true, isSubstantive: false, rank: null, sentiment: "neutral", sources: ["e.com"] }),
+      makeResult({ isPresent: true, isSubstantive: false, rank: null, sentiment: "neutral", sources: ["f.com"] }),
+      makeResult({ isPresent: true, isSubstantive: false, rank: null, sentiment: "neutral", sources: ["g.com"] }),
+      makeResult({ isPresent: true, isSubstantive: false, rank: null, sentiment: "neutral", sources: ["h.com"] }),
+      makeResult({ isPresent: false, rank: null, sentiment: "neutral", sources: ["i.com"] }),
+      makeResult({ isPresent: true, isSubstantive: false, rank: null, sentiment: "neutral", sources: ["j.com"] }),
+    ];
+    const score = computeVisibilityScore(results);
+    // Only 1/10 substantive citation => very low score
+    expect(score).toBeLessThan(30);
   });
 });

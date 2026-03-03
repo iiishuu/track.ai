@@ -14,6 +14,34 @@ export function extractBrandName(domain: string): string {
   return domain.replace(TLD_PATTERN, "").toLowerCase();
 }
 
+/** Patterns that indicate the AI doesn't actually know the brand */
+const IGNORANT_PATTERNS = [
+  /(?:i )?cannot find (?:any |sufficient )?information/i,
+  /no (?:relevant |specific )?information (?:is )?(?:available|found)/i,
+  /aucune information/i,
+  /pas d'informations? (?:suffisantes?|spécifiques?|disponibles?)/i,
+  /je n'ai pas d'informations?/i,
+  /n'(?:existe|apparaît) pas/i,
+  /doesn'?t (?:appear|exist|seem to exist)/i,
+  /i don'?t have (?:sufficient |enough )?information/i,
+  /n'apparaît pas parmi/i,
+  /may be a (?:smaller|private|misspelling)/i,
+  /could not (?:find|locate)/i,
+  /no (?:results?|data|details?) (?:about|for|on|mentioning)/i,
+  /il n'existe pas de site/i,
+  /ne mentionne (?:pas|aucun)/i,
+  /ce site n'apparaît pas/i,
+  /I cannot find information about/i,
+];
+
+/**
+ * Detects if an AI response is "ignorant" — the AI doesn't actually know the brand
+ * and is just echoing the query name or saying it has no info.
+ */
+export function isIgnorantResponse(response: string): boolean {
+  return IGNORANT_PATTERNS.some((pattern) => pattern.test(response));
+}
+
 /**
  * Local brand detection: checks if the brand or domain appears in the text.
  * This is a deterministic check that doesn't rely on the AI analysis.
@@ -75,7 +103,7 @@ Provide your analysis in JSON format only (no markdown, no explanation):
 }
 
 Rules:
-- "isPresent": true if "${brand}", "${domain}", "${capitalizedBrand}", or any obvious variation of the brand name appears ANYWHERE in the response text above. Simply search the text for the word "${brand}" — if it appears even once, it is present. Do NOT confuse "${brand}" with unrelated words or brands.
+- "isPresent": true ONLY if the response demonstrates genuine knowledge about "${brand}" — actual facts, features, pricing, reviews, comparisons, or recommendations. If the response merely echoes the query term "${brand}" while saying it has no information, cannot find the brand, or the brand doesn't exist, then isPresent must be FALSE. The key question is: does the AI actually KNOW this brand?
 - "rank": if the response contains a numbered list or ranking, what position is "${brand}" at? (1 = first, 2 = second, etc.). null if not ranked or not present.
 - "sentiment": about "${brand}" specifically — "positive" if recommending/praising, "negative" if criticizing/warning, "neutral" if just factual/mentioned.
 - "competitors": other brands/domains mentioned that compete with "${brand}" in the same space (max 5). Use domain format when possible.
@@ -171,18 +199,33 @@ export async function analyzeResponse(
 
   const result = parseAnalysisResponse(analysis.content, query, rawResponse, sources);
 
-  // Safety net: if local detection finds the brand but the AI said absent, override
-  const locallyDetected = detectBrandInText(domain, rawResponse);
-  if (locallyDetected && !result.isPresent) {
-    result.isPresent = true;
-    if (!result.context) {
-      // Extract first sentence containing the brand
-      const brand = extractBrandName(domain);
-      const sentences = rawResponse.split(/[.!?\n]+/);
-      const match = sentences.find((s) =>
-        s.toLowerCase().includes(brand) || s.toLowerCase().includes(domain.toLowerCase())
-      );
-      result.context = match?.trim() ?? "";
+  // Detect ignorant responses — AI doesn't actually know the brand
+  const ignorant = isIgnorantResponse(rawResponse);
+
+  if (ignorant) {
+    // Force absent + neutral for responses where the AI clearly doesn't know the brand
+    result.isPresent = false;
+    result.isSubstantive = false;
+    result.sentiment = "neutral";
+    result.rank = null;
+  } else {
+    result.isSubstantive = result.isPresent ? true : undefined;
+
+    // Safety net: if local detection finds the brand but the AI said absent, override
+    // ONLY when the response is NOT ignorant (has real content about the brand)
+    const locallyDetected = detectBrandInText(domain, rawResponse);
+    if (locallyDetected && !result.isPresent) {
+      result.isPresent = true;
+      result.isSubstantive = true;
+      if (!result.context) {
+        // Extract first sentence containing the brand
+        const brand = extractBrandName(domain);
+        const sentences = rawResponse.split(/[.!?\n]+/);
+        const match = sentences.find((s) =>
+          s.toLowerCase().includes(brand) || s.toLowerCase().includes(domain.toLowerCase())
+        );
+        result.context = match?.trim() ?? "";
+      }
     }
   }
 

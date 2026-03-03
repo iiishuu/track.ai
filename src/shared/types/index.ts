@@ -45,6 +45,8 @@ export interface QueryResult {
   query: string;
   response: string;
   isPresent: boolean;
+  /** Whether the AI response contains substantive/factual info about the brand (not just echoing the query or saying "I don't know") */
+  isSubstantive?: boolean;
   rank: number | null;
   sentiment: Sentiment;
   competitors: string[];
