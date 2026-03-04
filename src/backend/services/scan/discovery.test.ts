@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import type { AIProvider } from "@/shared/types";
-import { discoverDomain, parseDiscoveryResponse } from "./discovery";
+import { discoverDomain, parseDiscoveryResponse, sanitizeQueries } from "./discovery";
 
 function mockProvider(content: string): AIProvider {
   return {
@@ -108,5 +108,59 @@ describe("discoverDomain", () => {
   it("throws when provider returns invalid content", async () => {
     const provider = mockProvider("not json");
     await expect(discoverDomain("example.com", provider)).rejects.toThrow();
+  });
+});
+
+// ----- sanitizeQueries -----
+
+describe("sanitizeQueries", () => {
+  it("replaces standalone 'avis' with 'retours sur'", () => {
+    const queries = ["youtube.com avis 2026"];
+    const result = sanitizeQueries(queries);
+    expect(result[0]).not.toMatch(/\bavis\b/i);
+    expect(result[0]).toContain("retours sur");
+  });
+
+  it("replaces 'avis' at start of query", () => {
+    const queries = ["Avis sur youtube.com"];
+    const result = sanitizeQueries(queries);
+    expect(result[0]).not.toMatch(/\bAvis\b/);
+    expect(result[0]).toMatch(/Retours sur/i);
+  });
+
+  it("preserves 'avis des utilisateurs' (already qualified)", () => {
+    const queries = ["avis des utilisateurs sur stripe.com"];
+    const result = sanitizeQueries(queries);
+    expect(result[0]).toContain("avis des utilisateurs");
+  });
+
+  it("preserves 'avis positifs' (already qualified)", () => {
+    const queries = ["avis positifs sur netflix.com"];
+    const result = sanitizeQueries(queries);
+    expect(result[0]).toContain("avis positifs");
+  });
+
+  it("replaces 'processeur de paiement' with 'solution de paiement'", () => {
+    const queries = ["meilleur processeur de paiement en ligne"];
+    const result = sanitizeQueries(queries);
+    expect(result[0]).toContain("solution de paiement");
+    expect(result[0]).not.toContain("processeur de paiement");
+  });
+
+  it("does not modify English queries without ambiguities", () => {
+    const queries = ["best payment processor online", "stripe.com reviews"];
+    const result = sanitizeQueries(queries);
+    expect(result).toEqual(queries);
+  });
+
+  it("handles multiple ambiguities in one query", () => {
+    const queries = ["avis processeur de paiement"];
+    const result = sanitizeQueries(queries);
+    expect(result[0]).not.toMatch(/\bavis\b/i);
+    expect(result[0]).toContain("solution de paiement");
+  });
+
+  it("handles empty array", () => {
+    expect(sanitizeQueries([])).toEqual([]);
   });
 });

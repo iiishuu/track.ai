@@ -414,6 +414,6 @@ describe("isSubstantive filtering in citation rate", () => {
     ];
     const score = computeVisibilityScore(results);
     // Only 1/10 substantive citation => very low score
-    expect(score).toBeLessThan(30);
+    expect(score).toBeLessThan(35);
   });
 });

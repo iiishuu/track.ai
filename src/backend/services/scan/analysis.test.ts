@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import type { AIProvider } from "@/shared/types";
-import { analyzeResponse, parseAnalysisResponse, extractBrandName, isIgnorantResponse, detectBrandInText } from "./analysis";
+import { analyzeResponse, parseAnalysisResponse, extractBrandName, isIgnorantResponse, detectBrandInText, isOffTopicResponse, computeMentionOrderRank } from "./analysis";
 
 function mockProvider(content: string): AIProvider {
   return {
@@ -261,5 +261,85 @@ describe("analyzeResponse with ignorant responses", () => {
 
     expect(result.isPresent).toBe(true);
     expect(result.isSubstantive).toBe(true);
+  });
+});
+
+// ----- isOffTopicResponse -----
+
+describe("isOffTopicResponse", () => {
+  it("detects Avis car rental confusion in YouTube query", () => {
+    const response = "Avis car rental company reviews and comparisons for 2026 are available in several YouTube videos, primarily focusing on head-to-head matchups with competitors like National, Enterprise, Budget, and Thrifty.";
+    expect(isOffTopicResponse("youtube.com", "youtube.com avis 2026", response)).toBe(true);
+  });
+
+  it("detects car rental content when domain is not a car brand", () => {
+    const response = "Location de voiture comparatif 2026: Avis rental company vs Enterprise vs Budget. Les véhicules disponibles incluent...";
+    expect(isOffTopicResponse("stripe.com", "stripe.com avis", response)).toBe(true);
+  });
+
+  it("returns false for legitimate brand reviews", () => {
+    const response = "YouTube Premium is worth it in 2026. Users report better experience without ads. The platform continues to dominate video sharing.";
+    expect(isOffTopicResponse("youtube.com", "youtube.com avis 2026", response)).toBe(false);
+  });
+
+  it("returns false for normal responses without ambiguity", () => {
+    const response = "Stripe is a payment processing platform used by millions of businesses worldwide.";
+    expect(isOffTopicResponse("stripe.com", "what is stripe.com?", response)).toBe(false);
+  });
+
+  it("detects movie/car reviews when query is about domain reviews", () => {
+    const response = "Here are the top 2026 movie reviews and car reviews available on various platforms.";
+    expect(isOffTopicResponse("youtube.com", "youtube.com reviews 2026", response)).toBe(true);
+  });
+
+  it("returns false when review response is actually about the brand", () => {
+    const response = "YouTube review of its 2026 features: the platform added AI-powered recommendations and better creator tools.";
+    expect(isOffTopicResponse("youtube.com", "youtube.com reviews 2026", response)).toBe(false);
+  });
+});
+
+// ----- computeMentionOrderRank -----
+
+describe("computeMentionOrderRank", () => {
+  it("returns rank 1 when brand is mentioned first", () => {
+    const response = "YouTube is the leading platform. Vimeo offers professional tools. TikTok focuses on short-form.";
+    const rank = computeMentionOrderRank("youtube.com", response, ["vimeo.com", "tiktok.com"]);
+    expect(rank).toBe(1);
+  });
+
+  it("returns rank 2 when brand is mentioned second", () => {
+    const response = "Vimeo offers premium quality. YouTube has the largest audience. TikTok is growing fast.";
+    const rank = computeMentionOrderRank("youtube.com", response, ["vimeo.com", "tiktok.com"]);
+    expect(rank).toBe(2);
+  });
+
+  it("returns rank 3 when mentioned third", () => {
+    const response = "PayPal dominates online payments. Square is great for POS. Stripe offers developer-friendly APIs.";
+    const rank = computeMentionOrderRank("stripe.com", response, ["paypal.com", "square.com"]);
+    expect(rank).toBe(3);
+  });
+
+  it("returns null when brand is not in response", () => {
+    const response = "Vimeo and TikTok are popular platforms for video.";
+    const rank = computeMentionOrderRank("youtube.com", response, ["vimeo.com", "tiktok.com"]);
+    expect(rank).toBeNull();
+  });
+
+  it("returns null when brand is the only one mentioned (no competition context)", () => {
+    const response = "YouTube is a great platform for sharing videos with the world.";
+    const rank = computeMentionOrderRank("youtube.com", response, ["vimeo.com"]);
+    expect(rank).toBeNull();
+  });
+
+  it("handles case-insensitive matching", () => {
+    const response = "STRIPE is used by millions. PAYPAL is the largest.";
+    const rank = computeMentionOrderRank("stripe.com", response, ["paypal.com"]);
+    expect(rank).toBe(1);
+  });
+
+  it("handles empty competitors list", () => {
+    const response = "YouTube is a video platform.";
+    const rank = computeMentionOrderRank("youtube.com", response, []);
+    expect(rank).toBeNull();
   });
 });

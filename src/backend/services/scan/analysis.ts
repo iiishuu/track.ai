@@ -115,6 +115,117 @@ Respond ONLY with valid JSON, nothing else.${LOCALE_INSTRUCTION[locale]}
 `;
 };
 
+/**
+ * Detect if an AI response is off-topic / irrelevant to the domain's sector.
+ * Example: query about "youtube.com avis" returns content about Avis car rental.
+ */
+export function isOffTopicResponse(
+  domain: string,
+  query: string,
+  response: string
+): boolean {
+  const brand = extractBrandName(domain);
+  const lowerResponse = response.toLowerCase();
+  const lowerQuery = query.toLowerCase();
+
+  // Known confusion patterns:
+  // "avis" (opinions) → Avis (car rental)
+  const avisCarPatterns = [
+    /\bavis\s+(car|rental|rent|location|voiture)/i,
+    /\b(national|enterprise|budget|thrifty|hertz)\b.*\bavis\b/i,
+    /\bavis\b.*\b(national|enterprise|budget|thrifty|hertz)\b/i,
+    /\bavis car rental/i,
+    /\brental\s+company\b.*\bavis\b/i,
+    /\bavis\b.*\brental\s+company\b/i,
+  ];
+
+  // If the query contains "avis" and the response is about car rentals
+  if (lowerQuery.includes("avis")) {
+    if (avisCarPatterns.some((p) => p.test(response))) {
+      return true;
+    }
+  }
+
+  // Generic off-topic detection:
+  // If the brand is NOT about cars/vehicles, but the response is dominated by car content
+  const carDomains = ["avis", "hertz", "enterprise", "budget", "sixt", "europcar"];
+  const isCarBrand = carDomains.includes(brand);
+  if (!isCarBrand) {
+    const carKeywords = ["car rental", "location de voiture", "rental company", "vehicle", "véhicule"];
+    const carMentions = carKeywords.filter((kw) => lowerResponse.includes(kw)).length;
+    const brandMentions = (lowerResponse.match(new RegExp(brand.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), "gi")) || []).length;
+    // If car keywords dominate and the brand appears in car rental context
+    if (carMentions >= 2 && brandMentions <= 2) {
+      return true;
+    }
+  }
+
+  // "reviews YEAR" confusion: response about reviewing products/movies/cars instead of reviewing the domain
+  const yearMatch = lowerQuery.match(/\b(20\d{2})\b/);
+  if (yearMatch && lowerQuery.includes("review")) {
+    // Check if the response is about the brand's reviews or about reviewing other things
+    const brandInReviewContext =
+      lowerResponse.includes(`${brand} review`) ||
+      lowerResponse.includes(`review of ${brand}`) ||
+      lowerResponse.includes(`${brand} rating`) ||
+      lowerResponse.includes(`avis sur ${brand}`) ||
+      lowerResponse.includes(`retours sur ${brand}`);
+    
+    if (!brandInReviewContext && !lowerResponse.includes(domain.toLowerCase())) {
+      // Response doesn't discuss the brand's reviews at all
+      const otherReviewTopics = ["movie", "film", "vehicle", "voiture", "car review"];
+      if (otherReviewTopics.some((t) => lowerResponse.includes(t))) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Compute mention-order rank: find the position of the brand among all brands mentioned.
+ * If the response doesn't have numbered lists but mentions multiple brands,
+ * rank is determined by order of first appearance.
+ */
+export function computeMentionOrderRank(
+  domain: string,
+  response: string,
+  competitors: string[]
+): number | null {
+  const brand = extractBrandName(domain);
+  const lowerResponse = response.toLowerCase();
+
+  // Collect all brand mentions with their first position
+  const mentions: Array<{ name: string; position: number }> = [];
+
+  // Find the target brand
+  const brandPos = lowerResponse.indexOf(brand);
+  if (brandPos === -1) return null;
+  mentions.push({ name: brand, position: brandPos });
+
+  // Find competitors
+  for (const comp of competitors) {
+    const compBrand = extractBrandName(comp);
+    if (compBrand === brand) continue;
+    const compPos = lowerResponse.indexOf(compBrand);
+    if (compPos !== -1) {
+      // Avoid duplicates
+      if (!mentions.some((m) => m.name === compBrand)) {
+        mentions.push({ name: compBrand, position: compPos });
+      }
+    }
+  }
+
+  // If only the target brand is mentioned, no meaningful rank
+  if (mentions.length <= 1) return null;
+
+  // Sort by position (first mentioned = rank 1)
+  mentions.sort((a, b) => a.position - b.position);
+  const rank = mentions.findIndex((m) => m.name === brand) + 1;
+  return rank;
+}
+
 const VALID_SENTIMENTS: Sentiment[] = ["positive", "neutral", "negative"];
 
 export function parseAnalysisResponse(
@@ -209,22 +320,36 @@ export async function analyzeResponse(
     result.sentiment = "neutral";
     result.rank = null;
   } else {
-    result.isSubstantive = result.isPresent ? true : undefined;
+    // Check for off-topic responses (e.g. "avis" car rental confusion)
+    const offTopic = isOffTopicResponse(domain, query, rawResponse);
+    if (offTopic) {
+      result.isPresent = false;
+      result.isSubstantive = false;
+      result.sentiment = "neutral";
+      result.rank = null;
+    } else {
+      result.isSubstantive = result.isPresent ? true : undefined;
 
-    // Safety net: if local detection finds the brand but the AI said absent, override
-    // ONLY when the response is NOT ignorant (has real content about the brand)
-    const locallyDetected = detectBrandInText(domain, rawResponse);
-    if (locallyDetected && !result.isPresent) {
-      result.isPresent = true;
-      result.isSubstantive = true;
-      if (!result.context) {
-        // Extract first sentence containing the brand
-        const brand = extractBrandName(domain);
-        const sentences = rawResponse.split(/[.!?\n]+/);
-        const match = sentences.find((s) =>
-          s.toLowerCase().includes(brand) || s.toLowerCase().includes(domain.toLowerCase())
-        );
-        result.context = match?.trim() ?? "";
+      // Safety net: if local detection finds the brand but the AI said absent, override
+      // ONLY when the response is NOT ignorant (has real content about the brand)
+      const locallyDetected = detectBrandInText(domain, rawResponse);
+      if (locallyDetected && !result.isPresent) {
+        result.isPresent = true;
+        result.isSubstantive = true;
+        if (!result.context) {
+          // Extract first sentence containing the brand
+          const brand = extractBrandName(domain);
+          const sentences = rawResponse.split(/[.!?\n]+/);
+          const match = sentences.find((s) =>
+            s.toLowerCase().includes(brand) || s.toLowerCase().includes(domain.toLowerCase())
+          );
+          result.context = match?.trim() ?? "";
+        }
+      }
+
+      // Fallback rank: if AI didn't detect a numbered list rank, compute by mention order
+      if (result.isPresent && result.rank === null) {
+        result.rank = computeMentionOrderRank(domain, rawResponse, result.competitors);
       }
     }
   }

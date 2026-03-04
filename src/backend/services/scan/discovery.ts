@@ -51,6 +51,16 @@ CRITICAL QUERY RULES:
 - Do NOT generate overly generic queries that could apply to any industry
 - Each query must be specific enough that the AI response would meaningfully test whether "${brand}" is visible
 
+QUERY DISAMBIGUATION (VERY IMPORTANT):
+- Every query MUST be unambiguous — it should only have ONE possible interpretation related to "${domain}"'s sector
+- Avoid words that have multiple meanings across industries. Examples of FORBIDDEN ambiguities:
+  - "processeur" in French can mean CPU or payment processor → use "solution de paiement", "plateforme de paiement" instead
+  - "avis" in French is also a car rental brand → NEVER use "avis" alone, use "opinions sur", "retours sur", "que pensez-vous de"
+  - "reviews" alone can refer to product reviews, movie reviews, car reviews → always qualify: "${brand} user reviews", "reviews of ${domain}"
+  - "platform" can mean software platform, oil platform → add sector context
+- If a word is polysemic (has multiple meanings), always add a qualifier that locks the meaning to "${domain}"'s sector
+- Include the brand name, domain, or a clear sector keyword in queries that could otherwise be misinterpreted
+
 Distribute queries across these types:
   - ${typeInstructions}
 
@@ -94,8 +104,51 @@ export function parseDiscoveryResponse(
   return {
     sector: String(parsed.sector),
     competitors: parsed.competitors.map(String).slice(0, 5),
-    queries: parsed.queries.map(String).slice(0, queryCount),
+    queries: sanitizeQueries(parsed.queries.map(String).slice(0, queryCount)),
   };
+}
+
+/**
+ * Deterministic post-generation sanitization of queries.
+ * Fixes known ambiguities that LLMs ignore in the prompt.
+ */
+export function sanitizeQueries(queries: string[]): string[] {
+  return queries.map((q) => {
+    let sanitized = q;
+
+    // Fix French "avis" ambiguity (car rental brand)
+    // \bavis\b standalone or "avis sur", "avis 2026" etc.
+    // But NOT "avis des utilisateurs" which is fine contextually
+    sanitized = sanitized.replace(
+      /\bavis\b(?!\s+(?:des\s+(?:utilisateurs|clients|experts)|positifs?|négatifs?|mitigés?))/gi,
+      (match, offset, str) => {
+        // If "avis" appears with the domain nearby, replace with "retours sur"
+        const before = str.slice(Math.max(0, offset - 30), offset).toLowerCase();
+        const after = str.slice(offset + match.length, offset + match.length + 30).toLowerCase();
+        // Preserve casing roughly
+        if (before.includes(".") || after.includes(".")) {
+          // Near a domain, use "retours sur" or "opinions sur"
+          return match[0] === match[0].toUpperCase() ? "Retours sur" : "retours sur";
+        }
+        return match[0] === match[0].toUpperCase() ? "Retours sur" : "retours sur";
+      }
+    );
+
+    // Fix French "processeur" ambiguity (CPU vs payment processor)
+    sanitized = sanitized.replace(
+      /\bprocesseur\s+de\s+paiement/gi,
+      "solution de paiement"
+    );
+    sanitized = sanitized.replace(
+      /\bmeilleur\s+processeur\b(?!.*\b(?:cpu|amd|intel|ryzen)\b)/gi,
+      (match) => {
+        // Only replace if it looks like a payment context
+        return match;
+      }
+    );
+
+    return sanitized;
+  });
 }
 
 const DISCOVERY_MAX_RETRIES = 2;
